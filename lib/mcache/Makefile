@@ -3,10 +3,10 @@
 # All rights reserved.
 #
 
-TARGET = qmem.lib
+TARGET = mcache.lib
 
 SRCS	=		\
-	qalloc.c
+	mcache.c
 
 TOPDIR = ../..
 LIBS =
