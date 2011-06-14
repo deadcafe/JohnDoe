@@ -1,0 +1,38 @@
+#
+# Copyright (C) 2011, deadcafe.beef@gmail.com
+# All rights reserved.
+#
+
+all:	build
+
+build:	build-recursive
+
+build-recursive:	.MAKE
+	-@ for dir in $(SUBDIR) ; do \
+		if test -d $$dir ; then \
+			-@ echo "change directory to $$dir" ; \
+			(cd $$dir && $(MAKE)) || exit 1 ; \
+		fi ; done
+
+clean:	clean-local clean-recursive
+
+clean-local:
+	-@ rm -f *.so *.o *~ .*~ core
+
+clean-recursive:	.MAKE
+	-@ for dir in $(SUBDIR) ; do \
+		if test -d $$dir ; then \
+			-@ echo "change directory to $$dir" ; \
+			(cd $$dir && $(MAKE) clean) \
+		fi ; done
+
+depend:	depend-recursive
+
+depend-recursive:	.MAKE
+	-@ for dir in $(SUBDIR) ; do \
+		if test -d $$dir ; then \
+			-@ echo "change directory to $$dir" ; \
+			(cd $$dir && $(MAKE) depend) \
+		fi ; done
+
+.MAKE:

@@ -1,0 +1,37 @@
+#
+# Copyright (C) 2011, deadcafe.beef@gmail.com
+# All rights reserved.
+#
+
+INCDIR = $(TOPDIR)/include
+CPPFLAGS = -c -D_GNU_SOURCE -I./ -I../ -I$(INCDIR)
+
+CFLAGS  = -g -W -Wall -Wstrict-aliasing -std=gnu99 -m64 -fno-strict-aliasing -fno-omit-frame-pointer -pipe
+
+LDFLAGS = $(LDFLAGS_EXTRA)
+
+OBJS = ${SRCS:.c=.o}
+DEPENDS = .depend
+
+CFLAGS += $(COPTFLAGS) $(CFLAGS_EXTRA)
+
+.SUFFIXES:	.o .c
+.PHONY:	all clean depend
+
+all	:	depend $(TARGET)
+
+.c.o	:	Makefile
+	$(CC) $(CFLAGS) $(CPPFLAGS) $<
+
+$(TARGET):	$(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(EXTRA_OBJS) $(LIBS)
+
+$(OBJS)	:	Makefile
+
+clean:
+	-@ rm -f $(OBJS) $(TARGET) $(DEPENDS) *.so *.o *~ .*~ core
+
+depend: $(SRCS) Makefile
+	-@ $(CC) $(CPPFLAGS) -MM -MG $(SRCS) > $(DEPENDS)
+
+-include $(DEPENDS)

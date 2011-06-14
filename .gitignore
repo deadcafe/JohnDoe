@@ -1,0 +1,10 @@
+.*
+!.gitignore
+*.o
+*.so
+*.a
+*.lib
+*~
+.*~
+core
+core.*
