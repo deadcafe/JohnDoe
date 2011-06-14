@@ -1,0 +1,17 @@
+#
+# Copyright (C) 2011, deadcafe.beef@gmail.com
+# All rights reserved.
+#
+
+TOPDIR = /home/ichiyosi/work/JohnDoe
+
+LIBS = -levent
+COPTFLAGS = -O0
+CFLAGS_EXTRA =
+EXTRA_OBJS = \
+	$(TOPDIR)/lib/command/cmd.lib		\
+	$(TOPDIR)/lib/fstream/fstream.lib	\
+	$(TOPDIR)/lib/utils/utils.lib
+
+-include $(TOPDIR)/makefiles/Makefile.sandbox
+

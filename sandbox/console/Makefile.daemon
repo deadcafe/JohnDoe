@@ -1,0 +1,11 @@
+#
+# Copyright (C) 2011, deadcafe.beef@gmail.com
+# All rights reserved.
+#
+
+TARGET = daemon
+
+SRCS	=		\
+	daemon.c
+
+-include Makefile.share

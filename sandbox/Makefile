@@ -4,6 +4,6 @@
 #
 
 TOPDIR = ../
-SUBDIR	= .dhsupply
+SUBDIR	= .dhsupply console
 
 -include $(TOPDIR)/makefiles/Makefile.recursive

@@ -33,44 +33,43 @@
 #define LINE_BUFFER_SIZE 2048
 #define	ARG_SIZE	32
 
-static const struct fscmd_table basic_cmd_tbl[];
+static const struct jd_cmd_table basic_cmd_tbl[];
 
-#define disp_prompt(s)	fscmd_printf_raw((s), 1, (s)->prompt)
-
+#define disp_prompt(s)	jd_cmd_printf_raw((s), 1, (s)->prompt)
 
 /*****************************************************************************
  *	Command Tree
  *****************************************************************************/
 static void
-destroy_fscmd_node(struct fscmd_node *node)
+destroy_cmd_node(struct jd_cmd_node *node)
 {
-	struct fscmd_node *child;
+	struct jd_cmd_node *child;
 
 	while ((child = TAILQ_FIRST(&node->sub_tree)) != NULL) {
 		TAILQ_REMOVE(&node->sub_tree, child, lnk);
-		destroy_fscmd_node(child);
+		destroy_cmd_node(child);
 	}
 	LOG(LOG_DEBUG, "destroyed node: %p  tbl: %p(%s)\n",
 	    node, node->tbl, node->tbl->cmd);
 	free(node);
 }
 
-static int add_fscmd_table(struct fscmd_tree *head,
-			     const struct fscmd_table *tbl);
+static int add_cmd_table(struct jd_cmd_tree *head,
+			     const struct jd_cmd_table *tbl);
 
-static struct fscmd_node *
-create_fscmd_node(const struct fscmd_table *tbl)
+static struct jd_cmd_node *
+create_cmd_node(const struct jd_cmd_table *tbl)
 {
-	struct fscmd_node *node;
+	struct jd_cmd_node *node;
 
 	if ((node = malloc(sizeof(*node))) != NULL) {
 		node->tbl = tbl;
 		TAILQ_INIT(&node->sub_tree);
 		if (tbl->sub) {
-			if (add_fscmd_table(&node->sub_tree, tbl->sub)) {
+			if (add_cmd_table(&node->sub_tree, tbl->sub)) {
 				LOG(LOG_NOTICE,
-				    "failed at add_fscmd_tbl()\n");
-				destroy_fscmd_node(node);
+				    "failed at add_jd_cmd_tbl()\n");
+				destroy_cmd_node(node);
 				node = NULL;
 			}
 		}
@@ -80,16 +79,16 @@ create_fscmd_node(const struct fscmd_table *tbl)
 }
 
 static int
-add_fscmd_table(struct fscmd_tree *head,
-		  const struct fscmd_table *tbl)
+add_cmd_table(struct jd_cmd_tree *head,
+		  const struct jd_cmd_table *tbl)
 {
 	for (; tbl->cmd; tbl++) {
-		struct fscmd_node *new, *node;
+		struct jd_cmd_node *new, *node;
 
 		LOG(LOG_DEBUG, "adding tbl: %p(%s)\n", tbl, tbl->cmd);
 
-		if ((new = create_fscmd_node(tbl)) == NULL) {
-			LOG(LOG_NOTICE, "failed at create_fscmd_node()\n");
+		if ((new = create_cmd_node(tbl)) == NULL) {
+			LOG(LOG_NOTICE, "failed at create_cmd_node()\n");
 			return -1;
 		}
 
@@ -99,7 +98,7 @@ add_fscmd_table(struct fscmd_tree *head,
 			if (cmp <= 0) {
 				TAILQ_INSERT_BEFORE(node, new, lnk);
 				if (cmp == 0)
-					destroy_fscmd_node(node);
+					destroy_cmd_node(node);
 				goto done;
 			}
 		}
@@ -112,27 +111,27 @@ add_fscmd_table(struct fscmd_tree *head,
 }
 
 static void
-destroy_fscmd_tree(struct fscmd_tree *tree)
+destroy_cmd_tree(struct jd_cmd_tree *tree)
 {
-	struct fscmd_node *node;
+	struct jd_cmd_node *node;
 
 	LOG(LOG_DEBUG, "destroy tbl: %p\n", tree);
 	while ((node = TAILQ_FIRST(tree)) != NULL) {
 		TAILQ_REMOVE(tree, node, lnk);
-		destroy_fscmd_node(node);
+		destroy_cmd_node(node);
 	}
 	free(tree);
 }
 
-static struct fscmd_tree *
-create_fscmd_tree(const struct fscmd_table *tbl)
+static struct jd_cmd_tree *
+create_cmd_tree(const struct jd_cmd_table *tbl)
 {
-	struct fscmd_tree *head;
+	struct jd_cmd_tree *head;
 
 	if ((head = malloc(sizeof(*head))) != NULL) {
 		TAILQ_INIT(head);
-		if (add_fscmd_table(head, tbl)) {
-			LOG(LOG_NOTICE, "failed at add_fscmd_table()\n");
+		if (add_cmd_table(head, tbl)) {
+			LOG(LOG_NOTICE, "failed at add_cmd_table()\n");
 			free(head);
 			head = NULL;
 		}
@@ -146,23 +145,23 @@ create_fscmd_tree(const struct fscmd_table *tbl)
  *	command handle operations
  *****************************************************************************/
 static int
-usage(struct fscmd_handle *handle,
-      struct fscmd_tree *tree)
+usage(struct jd_cmd_handle *handle,
+      struct jd_cmd_tree *tree)
 {
-	struct fscmd_node *node;
+	struct jd_cmd_node *node;
 
 	TAILQ_FOREACH(node, tree, lnk)
-		fscmd_printf(handle, "\t%s:\t%s\n",
+		jd_cmd_printf(handle, "\t%s:\t%s\n",
 			       node->tbl->cmd, node->tbl->help);
 	return 0;
 }
 
 static int
-dispatch(struct fscmd_handle *handle,
-	 struct fscmd_tree *tree,
+dispatch(struct jd_cmd_handle *handle,
+	 struct jd_cmd_tree *tree,
 	 int argc, char **argv)
 {
-	struct fscmd_node *node;
+	struct jd_cmd_node *node;
 
 	TAILQ_FOREACH(node, tree, lnk) {
 		int cmp;
@@ -214,7 +213,7 @@ line2args(char *line,
 }
 
 static inline void
-detach_handle(struct fscmd_handle *handle)
+detach_handle(struct jd_cmd_handle *handle)
 {
 	handle->refcnt--;
 	if (!handle->refcnt) {
@@ -230,25 +229,25 @@ detach_handle(struct fscmd_handle *handle)
 }
 
 static inline void
-attach_handle(struct fscmd_handle *handle)
+attach_handle(struct jd_cmd_handle *handle)
 {
 	assert(handle->state != CMD_DEAD);
 	handle->refcnt++;
 }
 
 static void
-quit_exec(struct fscmd_handle *handle,
+quit_exec(struct jd_cmd_handle *handle,
 	  void *ctx __attribute__((unused)),
 	  int argc __attribute__((unused)),
 	  char **argv __attribute__((unused)))
 {
 	LOG(LOG_DEBUG, "state: %d  refcnt: %d\n",
 	    handle->state, handle->refcnt);
-	fscmd_printf(handle, "bye bye\n");
-	fscmd_destroy(handle);
+	jd_cmd_printf(handle, "bye bye\n");
+	jd_cmd_destroy(handle);
 }
 
-static const struct fscmd_table basic_cmd_tbl[] = {
+static const struct jd_cmd_table basic_cmd_tbl[] = {
 	{
 		.cmd = "quit",
 		.func = quit_exec,
@@ -267,14 +266,14 @@ static const struct fscmd_table basic_cmd_tbl[] = {
 /*****************************************************************************
  *	API low
  *****************************************************************************/
-struct fscmd_handle *
-fscmd_create(const char *name,
-	       void *ctx,
-	       struct fscmd_handle *parent,
-	       const char *prompt,
-	       const struct fscmd_table *tbl)
+struct jd_cmd_handle *
+jd_cmd_create(const char *name,
+	      void *ctx,
+	      struct jd_cmd_handle *parent,
+	      const char *prompt,
+	      const struct jd_cmd_table *tbl)
 {
-	struct fscmd_handle *handle;
+	struct jd_cmd_handle *handle;
 
 	if ((handle = calloc(1, sizeof(*handle))) != NULL) {
 		TAILQ_INIT(&handle->child);
@@ -301,7 +300,7 @@ fscmd_create(const char *name,
 				return NULL;
 			}
 			handle->prompt = prompt;
-			handle->cmd_tree = create_fscmd_tree(tbl);
+			handle->cmd_tree = create_cmd_tree(tbl);
 			if (!handle->cmd_tree) {
 				free(handle);
 				return NULL;
@@ -317,23 +316,23 @@ fscmd_create(const char *name,
 }
 
 static void
-fscmd_destroy_raw(struct fscmd_handle *handle,
-		    int ecode)
+jd_cmd_destroy_raw(struct jd_cmd_handle *handle,
+		   int ecode)
 {
-	struct fscmd_handle *child;
+	struct jd_cmd_handle *child;
 
 	LOG(LOG_DEBUG, "handle: %p(%s) sock: %d\n",
 	    handle, handle->name, handle->sock);
 
 	if (ecode && handle->err_cb) {
-		void (*err_cb)(struct fscmd_handle *, void *,
+		void (*err_cb)(struct jd_cmd_handle *, void *,
 			       int, int) = err_cb;
 		int sock = handle->sock;
 
-		fscmd_unbind_socket(handle);
+		jd_cmd_unbind_socket(handle);
 		(*err_cb)(handle, handle->ctx, sock, ecode);
 	} else {
-		fscmd_unbind_socket(handle);
+		jd_cmd_unbind_socket(handle);
 	}
 
 	if (handle->sock >= 0)
@@ -349,10 +348,10 @@ fscmd_destroy_raw(struct fscmd_handle *handle,
 		handle->parent = NULL;
 	}
 	while ((child = TAILQ_FIRST(&handle->child)) != NULL)
-		fscmd_destroy_raw(child, 0);
+		jd_cmd_destroy_raw(child, 0);
 
 	if (handle->cmd_tree) {
-		destroy_fscmd_tree(handle->cmd_tree);
+		destroy_cmd_tree(handle->cmd_tree);
 		handle->cmd_tree = NULL;
 	}
 	if (handle->prompt)
@@ -364,19 +363,19 @@ fscmd_destroy_raw(struct fscmd_handle *handle,
 }
 
 void
-fscmd_destroy(struct fscmd_handle *handle)
+jd_cmd_destroy(struct jd_cmd_handle *handle)
 {
 	handle->err_cb = NULL;
-	fscmd_destroy_raw(handle, 0);
+	jd_cmd_destroy_raw(handle, 0);
 }
 
 /*
  * register socket
  */
 void
-fscmd_unbind_socket(struct fscmd_handle *handle)
+jd_cmd_unbind_socket(struct jd_cmd_handle *handle)
 {
-	fscmd_unbind_event(handle);
+	jd_cmd_unbind_event(handle);
 	switch (handle->state) {
 	case CMD_LISTEN:
 	case CMD_ACCEPT:
@@ -393,10 +392,10 @@ fscmd_unbind_socket(struct fscmd_handle *handle)
 }
 
 int
-fscmd_bind_socket(struct fscmd_handle *handle,
-		    int sock,
-		    int state,
-		    void (*err_cb)(struct fscmd_handle *, void *, int, int))
+jd_cmd_bind_socket(struct jd_cmd_handle *handle,
+		   int sock,
+		   int state,
+		   void (*err_cb)(struct jd_cmd_handle *, void *, int, int))
 {
 	if (sock < 0 || !err_cb || CMD_DEAD > state || CMD_PARMANENT < state) {
 		errno = EINVAL;
@@ -420,7 +419,7 @@ fscmd_bind_socket(struct fscmd_handle *handle,
  * register event
  */
 void
-fscmd_unbind_event(struct fscmd_handle *handle)
+jd_cmd_unbind_event(struct jd_cmd_handle *handle)
 {
 	ERRBUFF();
 
@@ -435,10 +434,10 @@ fscmd_unbind_event(struct fscmd_handle *handle)
 }
 
 int
-fscmd_bind_event(struct fscmd_handle *handle,
-		   short event,
-		   void (*handler)(int, short, void *),
-		   const struct timeval *to)
+jd_cmd_bind_event(struct jd_cmd_handle *handle,
+		  short event,
+		  void (*handler)(int, short, void *),
+		  const struct timeval *to)
 {
 	ERRBUFF();
 
@@ -469,9 +468,9 @@ fscmd_bind_event(struct fscmd_handle *handle,
 }
 
 int
-fscmd_dispatch(struct fscmd_handle *handle,
-		 char *line,
-		 size_t len)
+jd_cmd_dispatch(struct jd_cmd_handle *handle,
+		char *line,
+		size_t len)
 {
 	int ret;
 	int argc;
@@ -491,14 +490,14 @@ fscmd_dispatch(struct fscmd_handle *handle,
 		if (ret) {
 			int i;
 
-			fscmd_printf(handle,
+			jd_cmd_printf(handle,
 				       "unknown command: ");
 			for (i = 0; i < argc; i++)
-				fscmd_printf(handle, "%s ", argv[i]);
-			fscmd_printf(handle, "\n");
+				jd_cmd_printf(handle, "%s ", argv[i]);
+			jd_cmd_printf(handle, "\n");
 		}
 	} else if (argc < 0) {
-		fscmd_printf(handle, "too many token\n");
+		jd_cmd_printf(handle, "too many token\n");
 	}
 	disp_prompt(handle);
 	detach_handle(handle);
@@ -506,10 +505,10 @@ fscmd_dispatch(struct fscmd_handle *handle,
 }
 
 int
-fscmd_printf_raw(struct fscmd_handle *handle,
-		   int flags,
-		   const char *fmt,
-		   ...)
+jd_cmd_printf_raw(struct jd_cmd_handle *handle,
+		  int flags,
+		  const char *fmt,
+		  ...)
 {
 	va_list ap;
 	char buff[PRINT_BUFFER_SIZE];
@@ -546,7 +545,7 @@ fscmd_printf_raw(struct fscmd_handle *handle,
 			else if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;	/* ignore msg, sorry */
 
-			fscmd_destroy_raw(handle, errno);
+			jd_cmd_destroy_raw(handle, errno);
 			return -1;
 		}
 		len += slen;
@@ -559,9 +558,9 @@ fscmd_printf_raw(struct fscmd_handle *handle,
  *	API high(old style) & utils
  *****************************************************************************/
 void
-fscmd_close(struct fscmd_handle *handle)
+jd_cmd_close(struct jd_cmd_handle *handle)
 {
-	fscmd_destroy(handle);
+	jd_cmd_destroy(handle);
 }
 
 /*
@@ -573,7 +572,7 @@ event_handler(int s __attribute__((unused)),
 	      void *arg)
 {
 	ssize_t bytes;
-	struct fscmd_handle *handle = arg;
+	struct jd_cmd_handle *handle = arg;
 	char line[LINE_BUFFER_SIZE];
 
 	LOG(LOG_DEBUG, "trace handle: %p\n", handle);
@@ -581,10 +580,10 @@ event_handler(int s __attribute__((unused)),
 	errno = 0;
 	bytes = read(handle->sock, line, sizeof(line) - 1);
 	if (bytes <= 0) {
-		struct fscmd_handle *handle = arg;
+		struct jd_cmd_handle *handle = arg;
 
 		if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			fscmd_destroy_raw(handle, errno);
+			jd_cmd_destroy_raw(handle, errno);
 		return;
 	}
 	LOG(LOG_DEBUG, "byte: %ld\n", bytes);
@@ -603,7 +602,7 @@ event_handler(int s __attribute__((unused)),
 			}
 
 			len = cr - p + 1;
-			fscmd_dispatch(handle, p, len);
+			jd_cmd_dispatch(handle, p, len);
 			odd -= len;
 			p += len;
 		}
@@ -611,7 +610,7 @@ event_handler(int s __attribute__((unused)),
 }
 
 /*
- * fscmd_init callback(listen)
+ * jd_cmd_init callback(listen)
  */
 static void
 listen_handler(int s __attribute__ ((unused)),
@@ -620,7 +619,7 @@ listen_handler(int s __attribute__ ((unused)),
 {
 	struct sockaddr_storage ss;
 	socklen_t sslen = sizeof(ss);
-	struct fscmd_handle *handle, *parent = arg;
+	struct jd_cmd_handle *handle, *parent = arg;
 	int sd;
 	char from[128];
 	ERRBUFF();
@@ -672,37 +671,37 @@ listen_handler(int s __attribute__ ((unused)),
 		return;
 	}
 
-	handle = fscmd_create(from, parent->ctx, parent, NULL, NULL);
+	handle = jd_cmd_create(from, parent->ctx, parent, NULL, NULL);
 	if (!handle) {
 		CLOSE(sd);
 		return;
 	}
-	if (fscmd_bind_socket(handle, sd, CMD_ACCEPT, parent->err_cb)) {
-		fscmd_destroy(handle);
+	if (jd_cmd_bind_socket(handle, sd, CMD_ACCEPT, parent->err_cb)) {
+		jd_cmd_destroy(handle);
 		CLOSE(sd);
 		return;
 	}
-	if (fscmd_bind_event(handle, EV_READ | EV_PERSIST,
+	if (jd_cmd_bind_event(handle, EV_READ | EV_PERSIST,
 			       event_handler, NULL)) {
-		fscmd_destroy(handle);
+		jd_cmd_destroy(handle);
 		CLOSE(sd);
 		return;
 	}
 }
 
-struct fscmd_handle *
-fscmd_init(struct fscmd_handle *parent,
-	     const char *prompt,
-	     const struct fscmd_table *tbl,
-	     uint16_t port,
-	     const char *sock_name,
-	     void (*err_cb)(struct fscmd_handle *,
-			    void *, int, int),
-	     void *ctx)
+struct jd_cmd_handle *
+jd_cmd_init(struct jd_cmd_handle *parent,
+	    const char *prompt,
+	    const struct jd_cmd_table *tbl,
+	    uint16_t port,
+	    const char *sock_name,
+	    void (*err_cb)(struct jd_cmd_handle *,
+			   void *, int, int),
+	    void *ctx)
 {
 	struct sockaddr_storage ss;
 	socklen_t salen;
-	struct fscmd_handle *handle = NULL;
+	struct jd_cmd_handle *handle = NULL;
 	int sock = -1;
 	ERRBUFF();
 
@@ -711,7 +710,7 @@ fscmd_init(struct fscmd_handle *parent,
 		return NULL;
 	}
 
-	if ((sock = fscmd_open_server(sock_name, port, &ss, &salen)) < 0)
+	if ((sock = jd_cmd_open_server(sock_name, port, &ss, &salen)) < 0)
 		return NULL;
 	if (bind(sock, (struct sockaddr *)&ss, salen) < 0) {
 		LOG(LOG_NOTICE, "failed at bind(): %s\n", STRERR(errno));
@@ -724,53 +723,53 @@ fscmd_init(struct fscmd_handle *parent,
 		return NULL;
 	}
 
-	handle = fscmd_create(sock_name, ctx, parent, prompt, basic_cmd_tbl);
+	handle = jd_cmd_create(sock_name, ctx, parent, prompt, basic_cmd_tbl);
 	if (!handle) {
 		CLOSE(sock);
 		return NULL;
 	}
-	if (add_fscmd_table(handle->cmd_tree, tbl)) {
-		fscmd_destroy(handle);
+	if (add_cmd_table(handle->cmd_tree, tbl)) {
+		jd_cmd_destroy(handle);
 		CLOSE(sock);
 		return NULL;
 	}
-	if (fscmd_bind_socket(handle, sock, CMD_LISTEN, err_cb)) {
-		fscmd_destroy(handle);
+	if (jd_cmd_bind_socket(handle, sock, CMD_LISTEN, err_cb)) {
+		jd_cmd_destroy(handle);
 		CLOSE(sock);
 		return NULL;
 	}
-	if (fscmd_bind_event(handle, EV_READ | EV_PERSIST,
+	if (jd_cmd_bind_event(handle, EV_READ | EV_PERSIST,
 			       listen_handler, NULL)) {
-		fscmd_destroy(handle);
+		jd_cmd_destroy(handle);
 		handle = NULL;
 	}
 	return handle;
 }
 
-struct fscmd_handle *
-fscmd_bind_stdin(struct fscmd_handle *parent,
-		   const char *prompt,
-		   const struct fscmd_table *tbl,
-		   void (*err_cb)(struct fscmd_handle *, void *, int, int),
-		   void *ctx)
+struct jd_cmd_handle *
+jd_cmd_bind_stdin(struct jd_cmd_handle *parent,
+		  const char *prompt,
+		  const struct jd_cmd_table *tbl,
+		  void (*err_cb)(struct jd_cmd_handle *, void *, int, int),
+		  void *ctx)
 {
-	struct fscmd_handle *handle;
+	struct jd_cmd_handle *handle;
 
 	if (!err_cb || (!parent && (!prompt || !tbl))) {
 		errno = EINVAL;
 		return NULL;
 	}
 
-	handle = fscmd_create("stdin", ctx, parent, prompt, tbl);
+	handle = jd_cmd_create("stdin", ctx, parent, prompt, tbl);
 	if (handle) {
-		if (fscmd_bind_socket(handle, STDIN_FILENO, CMD_PARMANENT,
+		if (jd_cmd_bind_socket(handle, STDIN_FILENO, CMD_PARMANENT,
 					err_cb)) {
-			fscmd_destroy(handle);
+			jd_cmd_destroy(handle);
 			return NULL;
 		}
-		if (fscmd_bind_event(handle, EV_READ | EV_PERSIST,
+		if (jd_cmd_bind_event(handle, EV_READ | EV_PERSIST,
 				       event_handler, NULL)) {
-			fscmd_destroy(handle);
+			jd_cmd_destroy(handle);
 			return NULL;
 		}
 	}
@@ -778,7 +777,7 @@ fscmd_bind_stdin(struct fscmd_handle *parent,
 }
 
 static void
-err_handler(struct fscmd_handle *handle,
+err_handler(struct jd_cmd_handle *handle,
 	    void *ctx __attribute__((unused)),
 	    int sock __attribute__((unused)),
 	    int ecode)
@@ -786,17 +785,17 @@ err_handler(struct fscmd_handle *handle,
 	ERRBUFF();
 
 	LOG(LOG_INFO, "error handle: %p %s\n", handle, STRERR(ecode));
-	fscmd_destroy(handle);
+	jd_cmd_destroy(handle);
 }
 
 int
-fscmd_bind_file(struct fscmd_handle *parent,
-		  const struct fscmd_table *tbl,
-		  const char *fname,
+jd_cmd_bind_file(struct jd_cmd_handle *parent,
+		 const struct jd_cmd_table *tbl,
+		 const char *fname,
 		  int out)
 {
 	FILE *fp = NULL;
-	struct fscmd_handle *handle;
+	struct jd_cmd_handle *handle;
 	int fline = -1;
 	char prompt[64];
 	ERRBUFF();
@@ -813,7 +812,7 @@ fscmd_bind_file(struct fscmd_handle *parent,
 
 	prompt[0] = '\0';
 	fline = 0;
-	handle = fscmd_create("fname", NULL, parent, prompt, tbl);
+	handle = jd_cmd_create("fname", NULL, parent, prompt, tbl);
 	if (handle) {
 		char line[LINE_BUFFER_SIZE];
 
@@ -821,21 +820,21 @@ fscmd_bind_file(struct fscmd_handle *parent,
 		handle->prompt = prompt;
 		snprintf(prompt, sizeof(prompt), "%s<%d> ", fname, ++fline);
 
-		if (fscmd_bind_socket(handle, out, CMD_PARMANENT,
+		if (jd_cmd_bind_socket(handle, out, CMD_PARMANENT,
 					err_handler)) {
-			fscmd_destroy(handle);
+			jd_cmd_destroy(handle);
 			goto end;
 		}
 
 		while (fgets(line, sizeof(line), fp) != NULL) {
 			snprintf(prompt, sizeof(prompt), "%s<%d> ",
 				 fname, ++fline);
-			fscmd_printf(handle, "%s", line);
-			fscmd_dispatch(handle, line, strlen(line));
+			jd_cmd_printf(handle, "%s", line);
+			jd_cmd_dispatch(handle, line, strlen(line));
 		}
 
-		fscmd_unbind_socket(handle);
-		fscmd_destroy(handle);
+		jd_cmd_unbind_socket(handle);
+		jd_cmd_destroy(handle);
 	}
 end:
 	if (fp)
@@ -934,10 +933,10 @@ static const struct fssock_option tcp_server_options[] = {
 };
 
 int
-fscmd_open_server(const char *name,
-		  uint16_t port,
-		  struct sockaddr_storage *ss,
-		  socklen_t *salen)
+jd_cmd_open_server(const char *name,
+		   uint16_t port,
+		   struct sockaddr_storage *ss,
+		   socklen_t *salen)
 {
 	int sock;
 	ERRBUFF();

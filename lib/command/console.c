@@ -273,7 +273,7 @@ open_socket(const char *name,
 	int sock;
 	ERRBUFF();
 
-	sock = fscmd_open_client(name, port, &ss, &salen);
+	sock = jd_cmd_open_client(name, port, &ss, &salen);
 	if (sock < 0)
 		return -1;
 
@@ -288,7 +288,7 @@ open_socket(const char *name,
 }
 
 int
-fscmd_cli(const char *remote_name,
+jd_cmd_cli(const char *remote_name,
 	    uint16_t port,
 	    int in,
 	    int out,
@@ -407,10 +407,10 @@ static const struct fssock_option tcp_client_options[] = {
 
 
 int
-fscmd_open_client(const char *name,
-		  uint16_t port,
-		  struct sockaddr_storage *ss,
-		  socklen_t *salen)
+jd_cmd_open_client(const char *name,
+		   uint16_t port,
+		   struct sockaddr_storage *ss,
+		   socklen_t *salen)
 {
 	int sock;
 	struct sockaddr_in6 *sai6 = (struct sockaddr_in6 *) ss;
