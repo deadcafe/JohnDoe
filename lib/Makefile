@@ -4,6 +4,6 @@
 #
 
 TOPDIR = ../
-SUBDIR	= utils cipher fstream command slaver
+SUBDIR	= utils cipher fstream command slaver qmem
 
 -include $(TOPDIR)/makefiles/Makefile.recursive
