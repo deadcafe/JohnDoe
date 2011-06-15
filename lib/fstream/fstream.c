@@ -75,69 +75,90 @@ detach_fstream(struct fstream *fstream)
 	}
 }
 
+static inline int
+setup_event(struct fstream *fstream,
+	    struct event *ev,
+	    short type,
+	    void (*handler)(int, short, void *),
+	    int state)
+{
+	int ecode = 0;
+
+	event_set(ev, fstream->sock, type, handler, fstream);
+	if (event_add(ev, NULL)) {
+		ERRBUFF();
+		ecode = errno;
+		LOG(LOG_NOTICE,
+		    "failed at event_add: %s\n", STRERR(ecode));
+	} else {
+		fstream->state |= state;
+		LOG(LOG_DEBUG, "state change: %p %x\n",
+		    fstream, fstream->state);
+	}
+	return ecode;
+}
+
+static inline int
+clear_event(struct fstream *fstream,
+	    struct event *ev,
+	    int state)
+{
+	int ecode = 0;
+
+	if (event_del(ev)) {
+		ERRBUFF();
+		ecode = errno;
+		LOG(LOG_NOTICE,
+		    "failed at event_del: %s\n", STRERR(ecode));
+	}
+	fstream->state &= ~state;	/* ignore result */
+	LOG(LOG_DEBUG, "state change: %p %x\n", fstream, fstream->state);
+	return ecode;
+}
+
 static void
 fstream_destroy_raw(struct fstream *fstream,
 		    int ecode)
 {
-	LOG(LOG_DEBUG, "destroying fstream: %p  ecode: %d\n", fstream, ecode);
+	struct fstream_msg_node *node;
 
 	assert(fstream->refcnt > 0);
-	while (fstream) {
-		LOG(LOG_DEBUG, "fstream state: %d  refcnt: %d\n",
-		    fstream->state, fstream->refcnt);
+	LOG(LOG_DEBUG, "destroying fstream: %p  ecode: %d  state: %x\n",
+	    fstream, ecode, fstream->state);
 
-		switch (fstream->state) {
-		case FSTREAM_TX_WAITING:
-		{
-			struct fstream_msg_node *node;
-
-			event_del(&fstream->ev_tx);
-			while ((node = TAILQ_FIRST(&fstream->tx_q)) != NULL) {
-				TAILQ_REMOVE(&fstream->tx_q, node, lnk);
-				free_msg_node(node);
-			}
-			fstream->state = FSTREAM_READY;
-			break;
-		}
-
-		case FSTREAM_READY:
-		{
-			event_del(&fstream->ev_rx);
-			if (fstream->rx_node) {
-				free_msg_node(fstream->rx_node);
-				fstream->rx_node = NULL;
-			}
-			if (fstream->sock >= 0) {
-				close(fstream->sock);
-				fstream->sock = -1;
-			}
-			fstream->state = FSTREAM_DEAD;
-			break;
-		}
-		case FSTREAM_DEAD:
-		{
-			void (*err_cb)(void *, struct fstream *, int);
-			void *ctx;
-
-			err_cb = fstream->err_cb;
-			ctx = fstream->ctx;
-			if (err_cb) {
-				fstream->err_cb = NULL;
-				fstream->ctx = NULL;
-				if (ecode)
-					(*err_cb)(ctx, fstream, ecode);
-			}
-			detach_fstream(fstream);
-			fstream = NULL;
-			break;
-		}
-
-		default:
-			LOG(LOG_ERR, "unknown state: %d\n", fstream->state);
-			fstream = NULL;
-			break;
-		}
+	while ((node = TAILQ_FIRST(&fstream->w_q)) != NULL) {
+		TAILQ_REMOVE(&fstream->w_q, node, lnk);
+		free_msg_node(node);
 	}
+	if (fstream->rbuff) {
+		free_msg_node(fstream->rbuff);
+		fstream->rbuff = NULL;
+	}
+
+	if (fstream->state & FSTREAM_W_WAIT)
+		clear_event(fstream, &fstream->ev_w, FSTREAM_W_WAIT);
+	if (fstream->state & FSTREAM_ALIVE)
+		clear_event(fstream, &fstream->ev_r, FSTREAM_ALIVE);
+	if (fstream->state)
+		LOG(LOG_ERR, "unknown state: %x\n", fstream->state);
+
+	if (fstream->sock >= 0) {
+		CLOSE(fstream->sock);
+		fstream->sock = -1;
+	}
+
+	if (fstream->err_cb) {
+		void (*err_cb)(void *, struct fstream *, int);
+		void *ctx;
+
+		err_cb = fstream->err_cb;
+		ctx = fstream->ctx;
+		fstream->err_cb = NULL;
+		fstream->ctx = NULL;
+		if (ecode)
+			(*err_cb)(ctx, fstream, ecode);
+	}
+	detach_fstream(fstream);
 }
 
 static void
@@ -146,7 +167,7 @@ recv_handler(int sock,
 	     void *arg)
 {
 	struct fstream *fstream = arg;
-	struct fstream_msg_node *rx = fstream->rx_node;
+	struct fstream_msg_node *rx = fstream->rbuff;
 	int ecode = 0;
 	ERRBUFF();
 
@@ -157,7 +178,7 @@ recv_handler(int sock,
 		return;
 
 	attach_fstream(fstream);
-	while (fstream->state != FSTREAM_DEAD) {
+	while (fstream->state & FSTREAM_ALIVE) {
 		ssize_t len;
 		size_t size;
 
@@ -202,7 +223,7 @@ recv_handler(int sock,
 			continue;
 		rx->len = 0;
 		fstream->stats.rx_packets++;
-		(*fstream->rx_cb)(fstream->ctx, fstream, &rx->val.msg);
+		(*fstream->msg_cb)(fstream->ctx, fstream, &rx->val.msg);
 	}
 
 	if (ecode) {
@@ -212,6 +233,8 @@ recv_handler(int sock,
 	detach_fstream(fstream);
 }
 
+static void send_handler(int sock, short event, void *arg);
+
 static int
 msg_send(struct fstream *fstream)
 {
@@ -219,8 +242,10 @@ msg_send(struct fstream *fstream)
 	int ecode = 0;
 	ERRBUFF();
 
+	assert(!(fstream->state & FSTREAM_W_WAIT));
+
 	LOG(LOG_DEBUG, "fstream: %p\n", fstream);
-	while ((tx = TAILQ_FIRST(&fstream->tx_q)) != NULL) {
+	while ((tx = TAILQ_FIRST(&fstream->w_q)) != NULL) {
 		ssize_t len;
 		size_t size = ntohs(tx->val.msg.len);
 
@@ -229,25 +254,25 @@ msg_send(struct fstream *fstream)
 		len = send(fstream->sock, &tx->val.buff[tx->len], size,
 			   MSG_DONTWAIT);
 		if (len < 0) {
-			if (errno == EAGAIN ||
-			    errno == EWOULDBLOCK ||
-			    errno == EINTR) {
-				break;
+			if (errno == EINTR) {
+				continue;
+			} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				LOG(LOG_DEBUG, "waiting write socket.\n");
+				return setup_event(fstream, &fstream->ev_w,
+						   EV_WRITE, send_handler,
+						   FSTREAM_W_WAIT);
 			} else {
 				ecode = errno;
 				LOG(LOG_NOTICE,
-				    "failed at write(): %s\n", STRERR(errno));
+				    "failed at send(): %s\n", STRERR(errno));
 				break;
 			}
 		}
-
-		if (!len)
-			break;
 		tx->len += len;
 		fstream->stats.tx_bytes += len;
 		size -= len;
 		if (!size) {
-			TAILQ_REMOVE(&fstream->tx_q, tx, lnk);
+			TAILQ_REMOVE(&fstream->w_q, tx, lnk);
 			free_msg_node(tx);
 			fstream->stats.tx_packets++;
 		}
@@ -261,32 +286,14 @@ send_handler(int sock,
 	     void *arg)
 {
 	struct fstream *fstream =  arg;
-	int ecode = 0;
-	ERRBUFF();
+	int ecode;
 
 	LOG(LOG_DEBUG, "sock: %d  event: %d  fstream: %p\n",
 	    sock, event, fstream);
 
-	fstream->state = FSTREAM_READY;
-	if (event & EV_TIMEOUT)
-		LOG(LOG_NOTICE, "send timeout.\n");
-	if (event & EV_WRITE)
-		ecode = msg_send(fstream);
-
-	if (ecode) {
+	fstream->state &= ~FSTREAM_W_WAIT;
+	if ((ecode = msg_send(fstream)) != 0)
 		fstream_destroy_raw(fstream, ecode);
-	} else if (!ecode && !TAILQ_EMPTY(&fstream->tx_q)) {
-		event_set(&fstream->ev_tx, fstream->sock, EV_WRITE,
-			  send_handler, fstream);
-		if (event_add(&fstream->ev_tx, &send_TO)) {
-			ecode = errno;
-			LOG(LOG_NOTICE, "failed at event_add: %s\n",
-			    STRERR(ecode));
-			fstream_destroy_raw(fstream, ecode);
-		} else {
-			fstream->state = FSTREAM_TX_WAITING;
-		}
-	}
 }
 
 /*
@@ -297,58 +304,62 @@ send_handler(int sock,
 /*
  * initializer/de-initializer
  */
-static int
+static inline int
 init_fstream(struct fstream *fstream,
 	     int sock,
 	     size_t max_msg_size,
-	     void (*rx_cb)(void *, struct fstream *,
+	     void (*msg_cb)(void *, struct fstream *,
 			   const struct fstream_msg *),
 	     void (*err_cb)(void *, struct fstream *, int),
 	     void *ctx)
 {
 	struct fstream_msg_node *node = NULL;
-	int ecode;
-	ERRBUFF();
+	int ret = -1;
 
 	LOG(LOG_DEBUG, "fstream: %p  sock: %d  max: %lu\n",
 	    fstream, sock, max_msg_size);
 
 	memset(fstream, 0, sizeof(*fstream));
-	TAILQ_INIT(&fstream->tx_q);
+	TAILQ_INIT(&fstream->w_q);
 	fstream->sock = -1;
 
 	if ((node = alloc_msg_node(max_msg_size)) == NULL)
-		return -1;
+		goto end;
+
 	node->len = 0;
-
-	event_set(&fstream->ev_rx, sock, EV_READ | EV_PERSIST,
-		  recv_handler, fstream);
-	if (event_add(&fstream->ev_rx, NULL)) {
-		ecode = errno;
-		LOG(LOG_NOTICE,
-		    "failed at event_add: %s\n", STRERR(ecode));
-		free_msg_node(node);
-		errno = ecode;
-		return -1;
-	}
-
-	fstream->rx_node = node;
+	fstream->rbuff = node;
 	fstream->max_msg_size = max_msg_size + sizeof(struct fstream_msg);
-	fstream->sock = sock;
-	fstream->rx_cb = rx_cb;
+	fstream->msg_cb = msg_cb;
 	fstream->err_cb = err_cb;
 	fstream->ctx = ctx;
-	fstream->state = FSTREAM_READY;
+	fstream->sock = sock;
+
+	if (setup_event(fstream, &fstream->ev_w, EV_WRITE,
+			send_handler, FSTREAM_W_WAIT))
+		goto end;
+	if (setup_event(fstream, &fstream->ev_r, EV_READ | EV_PERSIST,
+			recv_handler, FSTREAM_ALIVE))
+		goto end;
 	attach_fstream(fstream);
+	ret = 0;
 	LOG(LOG_DEBUG, "initialized fstream: %p\n", fstream);
-	return 0;
+end:
+	if (ret) {
+		if (node)
+			free_msg_node(node);
+		if (fstream->state & FSTREAM_W_WAIT)
+			clear_event(fstream, &fstream->ev_w, FSTREAM_W_WAIT);
+		if (fstream->state & FSTREAM_ALIVE)
+			clear_event(fstream, &fstream->ev_r, FSTREAM_ALIVE);
+	}
+	return ret;
 }
 
 struct fstream *
 fstream_create(int sock,
 	       size_t max_payload_size,
-	       void (*rx_cb)(void *, struct fstream *,
-			     const struct fstream_msg *),
+	       void (*msg_cb)(void *, struct fstream *,
+			      const struct fstream_msg *),
 	       void (*err_cb)(void *, struct fstream *, int),
 	       void *ctx)
 {
@@ -356,14 +367,14 @@ fstream_create(int sock,
 
 	LOG(LOG_DEBUG, "sock: %d\n", sock);
 
-	if (!rx_cb || !err_cb || sock < 0) {
+	if (!msg_cb || !err_cb || sock < 0) {
 		errno = EINVAL;
 		return NULL;
 	}
 
 	if ((fstream = malloc(sizeof(*fstream))) != NULL) {
 		if (init_fstream(fstream, sock, max_payload_size,
-				rx_cb, err_cb, ctx)) {
+				msg_cb, err_cb, ctx)) {
 			free(fstream);
 			fstream = NULL;
 		}
@@ -412,7 +423,7 @@ fstream_msg_post(struct fstream *fstream,
 		struct fstream_msg *msg)
 {
 	struct fstream_msg_node *node = MSG2NODE(msg);
-	ERRBUFF();
+	int ret = -1;
 
 	LOG(LOG_DEBUG, "fstream: %p  msg: %p  node: %p\n",
 	    fstream, msg, node);
@@ -422,39 +433,26 @@ fstream_msg_post(struct fstream *fstream,
 		LOG(LOG_NOTICE, "invalid msg: %p length: %u(%lu)\n",
 		    msg, ntohs(msg->len), node->len);
 		errno = EINVAL;
-		return -1;
+		return ret;
 	}
 
-	switch (fstream->state) {
-	case FSTREAM_DEAD:
-	case FSTREAM_DYING:
+	if (!(fstream->state & FSTREAM_ALIVE)) {
 		LOG(LOG_NOTICE, "fstream is dead: %d\n", fstream->state);
 		errno = ENOENT;
-		return -1;
-
-	case FSTREAM_READY:
-		event_set(&fstream->ev_tx, fstream->sock, EV_WRITE,
-			  send_handler, fstream);
-		if (event_add(&fstream->ev_tx, &send_TO)) {
-			LOG(LOG_NOTICE,
-			    "failed at event_add: %s\n", STRERR(errno));
-			return -1;
-		}
-		fstream->state = FSTREAM_TX_WAITING;
-		break;
-
-	case FSTREAM_TX_WAITING:
-		break;
-
-	default:
-		LOG(LOG_ERR, "fstream is invalid.\n");
-		errno = EFAULT;
-		return -1;
+		return ret;
 	}
 
 	node->len = 0;
-	TAILQ_INSERT_TAIL(&fstream->tx_q, node, lnk);
-	return 0;
+	TAILQ_INSERT_TAIL(&fstream->w_q, node, lnk);
+	ret = 0;	/* msg is accepted, then result is success */
+
+	if (!(fstream->state & FSTREAM_W_WAIT)) {
+		int ecode;
+
+		if ((ecode = msg_send(fstream)) != 0)
+			fstream_destroy_raw(fstream, ecode);
+	}
+	return ret;
 }
 
 /*****************************************************************************

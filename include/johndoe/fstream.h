@@ -40,11 +40,10 @@ struct fstream_msg_node {
 	} val;
 };
 
-enum {
+enum {	/* bit assign */
 	FSTREAM_DEAD = 0,
-	FSTREAM_DYING,
-	FSTREAM_READY,
-	FSTREAM_TX_WAITING,
+	FSTREAM_ALIVE = 1,	/* added read event */
+	FSTREAM_W_WAIT = 2,	/* */
 };
 
 /*
@@ -52,16 +51,16 @@ enum {
  */
 struct fstream {
 	int sock;
-	int state;
+	unsigned int state;
 	size_t refcnt;
 	struct fstream_stats stats;
 	size_t max_msg_size;
-	struct event ev_tx;
-	struct event ev_rx;
-	struct fstream_msg_node *rx_node;
-	TAILQ_HEAD(node_q, fstream_msg_node) tx_q;
+	struct event ev_w;
+	struct event ev_r;
+	struct fstream_msg_node *rbuff;
+	TAILQ_HEAD(node_q, fstream_msg_node) w_q;
 	void *ctx;
-	void (*rx_cb)(void *, struct fstream *, const struct fstream_msg *);
+	void (*msg_cb)(void *, struct fstream *, const struct fstream_msg *);
 	void (*err_cb)(void *, struct fstream *, int);
 	void (*logger)(int, const char *, ...);
 };
