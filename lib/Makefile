@@ -4,6 +4,6 @@
 #
 
 TOPDIR = ../
-SUBDIR	= utils cipher fstream command slaver mcache
+SUBDIR	= utils cipher fstream command slaver mcache lock
 
 -include $(TOPDIR)/makefiles/Makefile.recursive
