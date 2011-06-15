@@ -44,7 +44,9 @@ create_mutex(void *ctx __attribute__((unused)))
 
 	if ((raw = malloc(sizeof(*raw))) != NULL) {
 		pthread_mutexattr_t attr;
+
 		pthread_mutexattr_init(&attr);
+#if 0
 		if (pthread_mutexattr_setprotocol) {
 			int ecode;
 
@@ -59,6 +61,7 @@ create_mutex(void *ctx __attribute__((unused)))
 				    STRERR(ecode));
 			}
 		}
+#endif
 
 		pthread_mutex_init(&raw->mutex, &attr);
 		pthread_mutexattr_destroy(&attr);
